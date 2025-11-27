@@ -1,0 +1,32 @@
+presets:
+  - name: tv
+    audio:
+      sink: alsa_output.pci-0000_01_00.1.hdmi-stereo
+      port: hdmi-output-0
+    outputs:
+      - id: "8d6cf6987f66"
+        active: true
+        resolution: 3840x2160@60
+        position: 0,0
+        priority: 1
+
+  - name: monitors
+    audio:
+      sink: alsa_output.pci-0000_0d_04.0.analog-stereo
+      port: analog-output;output-headphones-1
+    outputs:
+      - id: "cf6101061f3d"
+        active: true
+        resolution: 2560x1440@165
+        position: 1920,0
+        priority: 1
+      - id: "8d32bfa732af"
+        active: true
+        resolution: 1920x1080@60
+        position: 0,180
+        priority: 2
+      - id: "25f4781c89d0"
+        active: true
+        resolution: 1920x1080@60
+        position: 4480,180
+        priority: 3

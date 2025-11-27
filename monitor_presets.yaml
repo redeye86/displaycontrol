@@ -9,6 +9,21 @@ presets:
         resolution: 3840x2160@60
         position: 0,0
         priority: 1
+      - id: "cf6101061f3d"
+        active: false
+        resolution: 2560x1440@165
+        position: 1920,0
+        priority: 1
+      - id: "8d32bfa732af"
+        active: false
+        resolution: 1920x1080@60
+        position: 0,180
+        priority: 2
+      - id: "25f4781c89d0"
+        active: false
+        resolution: 1920x1080@60
+        position: 4480,180
+        priority: 3
 
   - name: monitors
     audio:
@@ -30,3 +45,7 @@ presets:
         resolution: 1920x1080@60
         position: 4480,180
         priority: 3
+      - id: "8d6cf6987f66"
+        active: false
+        resolution: 3840x2160@60
+        position: 0,0

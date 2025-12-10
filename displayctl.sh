@@ -202,19 +202,71 @@ apply_display() {
 }
 
 # ================== MAIN ==================
-case "${1:-}" in
+# ================== MAIN ==================
+video=1
+audio=1
+
+# Flags vorab auswerten
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --video-only)
+      audio=0
+      shift
+      ;;
+    --audio-only)
+      video=0
+      shift
+      ;;
+    list)
+      cmd="list"
+      shift
+      ;;
+    switch)
+      cmd="switch"
+      shift
+      ;;
+    *)
+      # Rest sollte das Preset sein
+      preset="$1"
+      shift
+      ;;
+  esac
+done
+
+case "${cmd:-}" in
   list )
     list_all
     ;;
+
   switch )
-    shift
-    apply_display "$1"
-    apply_audio "$1"
+    if [[ -z "${preset:-}" ]]; then
+      echo "Bitte ein Preset angeben."
+      exit 1
+    fi
+    
+    # Prüfen, ob das Preset existiert
+    if ! yq -e ".presets[] | select(.name == \"$preset\")" "$CONFIG_FILE" >/dev/null; then
+      echo "Fehler: Preset \"$preset\" existiert nicht in $CONFIG_FILE"
+      exit 1
+    fi
+
+    # Nur Display?
+    if [[ "$video" == "1" ]]; then
+      apply_display "$preset"
+    fi
+
+    # Nur Audio?
+    if [[ "$audio" == "1" ]]; then
+      apply_audio "$preset"
+    fi
     ;;
+
   * )
     echo "Usage:"
-    echo "  $0 list               # Monitore, IDs, Presets, Audio anzeigen"
-    echo "  $0 switch <preset>    # Preset anwenden"
+    echo "  $0 list"
+    echo "  $0 switch <preset>"
+    echo "  $0 switch --video-only <preset>"
+    echo "  $0 switch --audio-only <preset>"
     exit 1
     ;;
 esac

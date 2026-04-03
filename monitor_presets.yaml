@@ -1,5 +1,6 @@
 presets:
   - name: tv
+    use_dpms: false
     audio:
       sink: alsa_output.pci-0000_01_00.1.hdmi-stereo
       port: hdmi-output-0
@@ -26,6 +27,7 @@ presets:
         priority: 3
 
   - name: monitors
+    use_dpms: true
     audio:
       #sink: alsa_output.pci-0000_0d_04.0.analog-stereo
       #port: analog-output;output-headphones-1
@@ -37,6 +39,8 @@ presets:
         resolution: 2560x1440@165
         position: 1920,0
         priority: 1
+        # optional: feste ddcutil-Displaynummer als Fallback/Override
+        # ddc_display: 2
       - id: "8d32bfa732af"
         active: true
         resolution: 1920x1080@60

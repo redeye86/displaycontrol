@@ -198,7 +198,7 @@ apply_display() {
     position=$(_jq '.position')
     priority=$(_jq '.priority')
 
-    port="${PORTS[$id]}"
+    port="${PORTS[$id]:-}"
     [[ -z "$port" ]] && { echo "Warnung: Monitor-ID $id nicht angeschlossen."; continue; }
     short_port=$(echo "$port" | sed 's/^card[0-9]-//')
 
@@ -296,7 +296,7 @@ apply_wake() {
     [[ "$active" == "true" ]] || continue
 
     local port
-    port="${PORTS[$id]}"
+    port="${PORTS[$id]:-}"
     if [[ -z "$port" ]]; then
       echo "Warnung: Monitor-ID $id nicht angeschlossen, überspringe Wake."
       continue

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+
+exit 0
+
+
+
 # Post-suspend Recovery Hook für einen problematischen DP-Monitor (default: DP-5)
 # Strategie:
 # 1) KScreen-Status prüfen (connected/enabled)

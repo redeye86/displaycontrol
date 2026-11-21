@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if ! [ -x /usr/bin/yq ];
-then
+# Bei nicht-interaktivem SSH (`ssh host displayctl.sh ...`) wird ~/.bashrc
+# oft nicht ausgewertet -> ~/bin und ~/.local/bin fehlen im PATH.
+export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
+
+if ! command -v yq >/dev/null 2>&1; then
   echo "yq not found, please install"
   exit 1
 fi
@@ -13,16 +16,68 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 # Preset-File **immer relativ zum Script-Verzeichnis**
 CONFIG_FILE="$SCRIPT_DIR/monitor_presets.yaml"
 
+# ============= GRAFISCHE SESSION ANKOPPELN ==================
+# kscreen-doctor und pactl brauchen die Umgebung der laufenden Plasma-Session.
+# Per SSH (oder aus Hooks) fehlt die, bzw. XDG_SESSION_TYPE=tty lässt Qt auf
+# X11/xcb zurückfallen. Daher Variablen aus dem Session-Prozess übernehmen.
+SESSION_VARS=(WAYLAND_DISPLAY DISPLAY XAUTHORITY XDG_RUNTIME_DIR
+              DBUS_SESSION_BUS_ADDRESS XDG_SESSION_TYPE XDG_CURRENT_DESKTOP
+              QT_QPA_PLATFORM)
 
+find_session_pid() {
+  local uid_opt=()
+  [[ -n "${1:-}" ]] && uid_opt=(--uid "$1")
+  pgrep "${uid_opt[@]}" --newest plasmashell \
+    || pgrep "${uid_opt[@]}" --newest kwin_wayland \
+    || true
+}
 
-PLASMA_PID=$(pgrep --uid "$(id --user)" --newest plasmashell || true)
-
-if [[ -n "${PLASMA_PID:-}" ]] && [[ -r "/proc/$PLASMA_PID/environ" ]]; then
-  DISPLAY_ENVIRONMENT_VARS=$(tr '\0' '\n' < "/proc/$PLASMA_PID/environ" | grep -E 'WAYLAND_DISPLAY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS' || true)
-  if [[ -n "${DISPLAY_ENVIRONMENT_VARS:-}" ]]; then
-    export $DISPLAY_ENVIRONMENT_VARS
+# Als root (z.B. `ssh root@host` oder `sudo displayctl.sh`): als Besitzer der
+# Plasma-Session neu starten – kscreen/PipeWire laufen nur in dessen Kontext.
+if [[ "$EUID" -eq 0 && -z "${DISPLAYCTL_NO_REEXEC:-}" ]]; then
+  pid=$(find_session_pid)
+  if [[ -n "$pid" ]]; then
+    session_user=$(ps -o user= -p "$pid" | tr -d ' ')
+    if [[ -n "$session_user" && "$session_user" != "root" ]]; then
+      exec runuser -u "$session_user" -- env DISPLAYCTL_NO_REEXEC=1 "$SCRIPT_DIR/$(basename "$0")" "$@"
+    fi
   fi
 fi
+
+import_session_env() {
+  local pid line var
+  pid=$(find_session_pid "$(id --user)")
+
+  if [[ -n "$pid" && -r "/proc/$pid/environ" ]]; then
+    while IFS= read -r -d '' line; do
+      var="${line%%=*}"
+      for v in "${SESSION_VARS[@]}"; do
+        [[ "$var" == "$v" ]] && export "$line"
+      done
+    done < "/proc/$pid/environ"
+  else
+    echo "WARN: keine laufende Plasma-Session gefunden – rate Umgebung" >&2
+  fi
+
+  # Fallbacks, falls der Prozess nicht gefunden/lesbar war
+  : "${XDG_RUNTIME_DIR:=/run/user/$(id --user)}"
+  export XDG_RUNTIME_DIR
+  if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -S "$XDG_RUNTIME_DIR/bus" ]]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+  fi
+  if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+    local sock
+    sock=$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -type s -name 'wayland-[0-9]*' -printf '%f\n' 2>/dev/null | sort | head -n1)
+    [[ -n "$sock" ]] && export WAYLAND_DISPLAY="$sock"
+  fi
+
+  # Qt (kscreen-doctor) explizit auf Wayland zwingen – sonst wählt es per SSH xcb
+  if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+    export QT_QPA_PLATFORM=wayland
+    export XDG_SESSION_TYPE=wayland
+  fi
+}
+import_session_env
 
 
 #Terminal Coloring
@@ -150,13 +205,46 @@ list_all() {
 }
 
 # ============= AUDIO APPLY ==================
+# Sink-Namen zur Laufzeit ermitteln: ALSA-Karten-ID (stabil, z.B. "Creative")
+# -> aktuelle Kartennummer -> Sink mit passender alsa.card-Property.
+# Optional filtert $2 (Regex) den Sink-Namen, z.B. "hdmi" oder "analog".
+resolve_sink() {
+  local card="$1" match="${2:-}" link idx
+  link=$(readlink "/proc/asound/$card" 2>/dev/null || true)   # -> card2
+  idx="${link#card}"
+  if [[ -z "$idx" ]]; then
+    echo "WARN: ALSA-Karte '$card' nicht gefunden" >&2
+    return 0
+  fi
+  pactl -f json list sinks | jq -r --arg c "$idx" --arg m "$match" '
+    .[] | select(.properties["alsa.card"] == $c) | select(.name | test($m)) | .name
+  ' | head -n1
+}
+
 apply_audio() {
-  local preset="$1"
-  AUDIO_SINK=$(yq -r ".presets[] | select(.name == \"$preset\") | .audio.sink" "$CONFIG_FILE")
+  local preset="$1" card match
+  AUDIO_SINK=$(yq -r ".presets[] | select(.name == \"$preset\") | .audio.sink // \"\"" "$CONFIG_FILE")
   AUDIO_PORT=$(yq -r ".presets[] | select(.name == \"$preset\") | .audio.port" "$CONFIG_FILE")
+  card=$(yq -r ".presets[] | select(.name == \"$preset\") | .audio.card // \"\"" "$CONFIG_FILE")
+  match=$(yq -r ".presets[] | select(.name == \"$preset\") | .audio.sink_match // \"\"" "$CONFIG_FILE")
+
+  # "card" hat Vorrang; "sink" bleibt als fester Name/Fallback möglich
+  if [[ -n "$card" ]]; then
+    local resolved
+    resolved=$(resolve_sink "$card" "$match")
+    if [[ -n "$resolved" ]]; then
+      AUDIO_SINK="$resolved"
+    else
+      echo "WARN: kein Sink für Karte '$card' (Filter: '${match:-*}') gefunden" >&2
+    fi
+  fi
+  if [[ -z "$AUDIO_SINK" ]]; then
+    echo "Kein Audio-Sink ermittelbar, überspringe Audio" >&2
+    return 0
+  fi
 
   echo "Set audio port: $AUDIO_PORT"
-  pactl set-sink-port 0 "$AUDIO_PORT" || true
+  pactl set-sink-port "$AUDIO_SINK" "$AUDIO_PORT" || true
   
   echo "Set audio sink: $AUDIO_SINK"
   pactl set-default-sink "$AUDIO_SINK" || true
@@ -189,7 +277,7 @@ apply_display() {
   local -a ENABLE_CMDS=()
 
   IFS=$'\n'
-  for row in $(yq -r ".presets[] | select(.name == \"$preset\") | .outputs[] | @base64" "$CONFIG_FILE"); do
+  for row in $(yq -r ".presets[] | select(.name == \"$preset\") | .outputs[] | @json | @base64" "$CONFIG_FILE"); do
     _jq() { echo "$row" | base64 --decode | jq -r "$1"; }
 
     id=$(_jq '.id')
@@ -285,7 +373,7 @@ apply_wake() {
   local -a fallback_ports=()
 
   IFS=$'\n'
-  for row in $(yq -r ".presets[] | select(.name == \"$preset\") | .outputs[] | @base64" "$CONFIG_FILE"); do
+  for row in $(yq -r ".presets[] | select(.name == \"$preset\") | .outputs[] | @json | @base64" "$CONFIG_FILE"); do
     _jq() { echo "$row" | base64 --decode | jq -r "$1"; }
 
     local id active short_port ddc_override ddc_idx

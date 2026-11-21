@@ -10,6 +10,17 @@
 ./displayctl.sh wake monitors
 ```
 
+## Per SSH
+
+```bash
+ssh host ~/projects/display-control/displayctl.sh switch tv
+```
+
+Das Skript übernimmt die Umgebung der laufenden Plasma-Session (`WAYLAND_DISPLAY`,
+`DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`, …) aus `plasmashell` und erzwingt
+`QT_QPA_PLATFORM=wayland`. Als root aufgerufen startet es sich per `runuser` als
+Besitzer der Session neu. Voraussetzung: jemand ist grafisch angemeldet.
+
 ## Wake-Logik
 
 `wake` nutzt das Preset und weckt **alle aktiven Outputs** dynamisch auf:

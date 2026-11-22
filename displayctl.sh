@@ -262,15 +262,9 @@ apply_display() {
   local preset="$1"
   load_edids
 
-  USE_DPMS=$(yq -r ".presets[] | select(.name == \"$preset\") | .use_dpms" "$CONFIG_FILE")
-
-  # Basis-Command
-  if [ "$USE_DPMS" == "true" ];
-  then
-  	local CMD="kscreen-doctor -d"
-  else
-  	local CMD="kscreen-doctor"
-  fi
+  # Kein "-d" hier: kscreen-doctors -d/--dpms erwartet einen Wert (on/off/show)
+  # und würde den ersten output-Befehl (z.B. das TV-Disable) verschlucken.
+  local CMD="kscreen-doctor"
 
   # Erst disable, dann enable/konfig
   local -a DISABLE_CMDS=()

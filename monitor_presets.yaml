@@ -1,6 +1,5 @@
 presets:
   - name: tv
-    use_dpms: false
     audio:
       card: NVidia          # ALSA-ID aus /proc/asound/cards
       sink_match: hdmi      # Regex auf den Sink-Namen
@@ -28,7 +27,6 @@ presets:
         priority: 3
 
   - name: monitors
-    use_dpms: true
     audio:
       card: Creative
       sink_match: analog

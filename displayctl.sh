@@ -213,7 +213,7 @@ resolve_sink() {
   link=$(readlink "/proc/asound/$card" 2>/dev/null || true)   # -> card2
   idx="${link#card}"
   if [[ -z "$idx" ]]; then
-    echo "WARN: ALSA-Karte '$card' nicht gefunden" >&2
+    [[ -z "${QUIET:-}" ]] && echo "WARN: ALSA-Karte '$card' nicht gefunden" >&2
     return 0
   fi
   pactl -f json list sinks | jq -r --arg c "$idx" --arg m "$match" '
@@ -221,31 +221,66 @@ resolve_sink() {
   ' | head -n1
 }
 
+# Verfügbarkeit eines Ports: available | not available | availability unknown
+# (leer, wenn Sink oder Port nicht existiert)
+port_availability() {
+  local sink="$1" port="$2"
+  pactl -f json list sinks 2>/dev/null | jq -r --arg s "$sink" --arg p "$port" '
+    .[] | select(.name == $s) | .ports[]? | select(.name == $p) | .availability
+  ' | head -n1
+}
+
+# Nach dem Bildwechsel braucht der TV einige Sekunden, bis der HDMI-Link steht
+# und PipeWire den Sink bzw. Port als verfügbar meldet. Statt fest zu warten,
+# pollen bis er da ist (max. audio.wait Sekunden, Default 20).
+wait_for_audio() {
+  local card="$1" match="$2" timeout="$3" deadline sink avail
+  deadline=$((SECONDS + timeout))
+  while :; do
+    sink="$AUDIO_SINK"
+    [[ -n "$card" ]] && sink=$(QUIET=1 resolve_sink "$card" "$match")
+    if [[ -n "$sink" ]]; then
+      avail=""
+      [[ -n "$AUDIO_PORT" ]] && avail=$(port_availability "$sink" "$AUDIO_PORT")
+      if [[ -z "$AUDIO_PORT" || "$avail" == "available" || "$avail" == "availability unknown" ]]; then
+        AUDIO_SINK="$sink"
+        echo "Audio bereit nach $((SECONDS - deadline + timeout))s: $sink"
+        return 0
+      fi
+    fi
+    if (( SECONDS >= deadline )); then
+      echo "WARN: Audio nach ${timeout}s nicht bereit (Sink: '${sink:-}', Port: '${avail:-fehlt}'), versuche es trotzdem" >&2
+      [[ -n "$sink" ]] && AUDIO_SINK="$sink"
+      return 1
+    fi
+    sleep 0.5
+  done
+}
+
 apply_audio() {
-  local preset="$1" card match
+  local preset="$1" card match wait
   AUDIO_SINK=$(yq -r ".presets[] | select(.name == \"$preset\") | .audio.sink // \"\"" "$CONFIG_FILE")
   AUDIO_PORT=$(yq -r ".presets[] | select(.name == \"$preset\") | .audio.port" "$CONFIG_FILE")
   card=$(yq -r ".presets[] | select(.name == \"$preset\") | .audio.card // \"\"" "$CONFIG_FILE")
   match=$(yq -r ".presets[] | select(.name == \"$preset\") | .audio.sink_match // \"\"" "$CONFIG_FILE")
+  wait=$(yq -r ".presets[] | select(.name == \"$preset\") | .audio.wait // 20" "$CONFIG_FILE")
+  [[ "$AUDIO_PORT" == "null" ]] && AUDIO_PORT=""
 
   # "card" hat Vorrang; "sink" bleibt als fester Name/Fallback möglich
-  if [[ -n "$card" ]]; then
-    local resolved
-    resolved=$(resolve_sink "$card" "$match")
-    if [[ -n "$resolved" ]]; then
-      AUDIO_SINK="$resolved"
-    else
-      echo "WARN: kein Sink für Karte '$card' (Filter: '${match:-*}') gefunden" >&2
-    fi
+  wait_for_audio "$card" "$match" "$wait" || true
+  if [[ -n "$card" && -z "$AUDIO_SINK" ]]; then
+    echo "WARN: kein Sink für Karte '$card' (Filter: '${match:-*}') gefunden" >&2
   fi
   if [[ -z "$AUDIO_SINK" ]]; then
     echo "Kein Audio-Sink ermittelbar, überspringe Audio" >&2
     return 0
   fi
 
-  echo "Set audio port: $AUDIO_PORT"
-  pactl set-sink-port "$AUDIO_SINK" "$AUDIO_PORT" || true
-  
+  if [[ -n "$AUDIO_PORT" ]]; then
+    echo "Set audio port: $AUDIO_PORT"
+    pactl set-sink-port "$AUDIO_SINK" "$AUDIO_PORT" || true
+  fi
+
   echo "Set audio sink: $AUDIO_SINK"
   pactl set-default-sink "$AUDIO_SINK" || true
 

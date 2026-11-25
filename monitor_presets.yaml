@@ -4,6 +4,7 @@ presets:
       card: NVidia          # ALSA-ID aus /proc/asound/cards
       sink_match: hdmi      # Regex auf den Sink-Namen
       port: hdmi-output-0
+      wait: 20              # max. Sekunden warten, bis der TV-Ton verfügbar ist
     outputs:
       - id: "8d6cf6987f66"
         active: true

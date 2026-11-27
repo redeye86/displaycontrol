@@ -79,6 +79,13 @@ import_session_env() {
 }
 import_session_env
 
+# pactl immer mit C-Locale: Die Feldnamen der Textausgabe ("Name:", "Ports:")
+# sind dann englisch und lassen sich zuverlässig parsen.
+# "-f json" wird bewusst NICHT verwendet: Die Beschreibungen kommen übersetzt
+# vom PipeWire-Server ("Kopfhörer"), und pactls JSON-Encoder bricht bei jedem
+# Nicht-ASCII-Zeichen ab ("Invalid non-ASCII character: 0xffffffc3").
+pactl() { LC_ALL=C command pactl "$@"; }
+
 
 #Terminal Coloring
 if [[ -t 1 ]]; then
@@ -216,18 +223,33 @@ resolve_sink() {
     [[ -z "${QUIET:-}" ]] && echo "WARN: ALSA-Karte '$card' nicht gefunden" >&2
     return 0
   fi
-  pactl -f json list sinks | jq -r --arg c "$idx" --arg m "$match" '
-    .[] | select(.properties["alsa.card"] == $c) | select(.name | test($m)) | .name
-  ' | head -n1
+  pactl list sinks 2>/dev/null | awk -v c="$idx" -v m="$match" '
+    function emit() { if (name != "" && card == c && name ~ m) { print name; found = 1; exit } }
+    /^Sink #/          { emit(); name = ""; card = ""; next }
+    /^\tName: /        { name = substr($0, index($0, ": ") + 2); next }
+    /^\t\talsa\.card = / { v = $0; sub(/^[^"]*"/, "", v); sub(/".*$/, "", v); card = v; next }
+    END                { if (!found) emit() }
+  '
 }
 
 # Verfügbarkeit eines Ports: available | not available | availability unknown
 # (leer, wenn Sink oder Port nicht existiert)
 port_availability() {
   local sink="$1" port="$2"
-  pactl -f json list sinks 2>/dev/null | jq -r --arg s "$sink" --arg p "$port" '
-    .[] | select(.name == $s) | .ports[]? | select(.name == $p) | .availability
-  ' | head -n1
+  # Portzeile: "\t\t<name>: <Beschreibung> (type: …, priority: …, available)"
+  pactl list sinks 2>/dev/null | awk -v s="$sink" -v p="$port" '
+    /^Sink #/     { cur = ""; inports = 0; next }
+    /^\tName: /   { cur = substr($0, index($0, ": ") + 2) }
+    /^\t[^\t]/    { inports = 0 }
+    /^\tPorts:/   { inports = 1; next }
+    inports && cur == s && /^\t\t[^\t]/ {
+      line = $0; sub(/^\t\t/, "", line)
+      if (substr(line, 1, index(line, ": ") - 1) != p) next
+      sub(/\)[[:space:]]*$/, "", line)
+      n = split(line, parts, ", ")
+      print parts[n]; exit
+    }
+  '
 }
 
 # Nach dem Bildwechsel braucht der TV einige Sekunden, bis der HDMI-Link steht
